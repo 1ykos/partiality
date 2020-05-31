@@ -312,7 +312,7 @@ namespace partiality{
                                                         // *squared*
     double strain=0;                                    // crystal strain
     // scaling parameters a exp( - 0.5 b q² )
-    double a=1.0,b=0.0;
+    double a=0.0,b=0.0;
     double scaling(const matrix<double,3,1>& x) const {
       return a*exp(-0.5*b*length_squared(x));
     }
@@ -818,40 +818,19 @@ namespace partiality{
     dbnd.U = -trans(crystl.R)*dbnd.R*trans(crystl.R);
     return make_tuple(flx,wvn,bnd,dflx,dwvn,dbnd);
   }
-
-  void test_predict(){
-    struct source source;
-    source.flx = 7.0;
-    source.kin(0) = 0;
-    source.kin(1) = 0;
-    source.kin(2) = 101;
-    source.S12 = zeros_matrix<double>(3,3);
-    source.S12(0,0) = 1e-4;
-    source.S12(1,1) = 1e-4;
-    source.S12(2,2) = 1;
-    random_device rd;
-    uniform_real_distribution<double> udistr(-2,2);
-    uniform_int_distribution<int32_t> idistr(-5,5);
-    exponential_distribution<double> edistr;
-    struct crystl crystl;
-    crystl.R = zeros_matrix<double>(3,3);
-    while ((det(crystl.R)<0.25)||(det(crystl.R)>1))
-      for (size_t i=0;i!=3;++i)
-        for (size_t j=0;j!=3;++j)
-          crystl.R(i,j) = udistr(rd);
-    crystl.U = inv(crystl.R);
-    crystl.mosaicity = udistr(rd)*udistr(rd)*udistr(rd)*udistr(rd);
-    for (size_t i=0;i!=3;++i)
-      for (size_t j=0;j!=3;++j)
-        crystl.peak(i,j) = udistr(rd)*1e-2;
-    crystl.peak=crystl.peak*trans(crystl.peak);
-    crystl.strain = edistr(rd)*1e-3;
-    crystl.a = 1+edistr(rd)*16;
-    crystl.b = udistr(rd)*1e-2;
+  
+  void test_predict(
+      const struct source& source,
+      const struct crystl& crystl
+      ) {
     IDX idx;
     matrix<double,3,1> max_y;
     double max_flx = 0;
-    for (size_t i=0;i!=1u<<16;++i) {
+    random_device rd;
+    uniform_real_distribution<double> udistr(-2,2);
+    uniform_int_distribution<int32_t> idistr(-20,20);
+    exponential_distribution<double> edistr;
+    for (size_t i=0;i!=1u<<24;++i) {
       const matrix<double,3,1> w =
         normalize(matrix<double,3,1>{udistr(rd),udistr(rd),4+udistr(rd)});
       const matrix<double,3,3> psf =
@@ -1039,6 +1018,38 @@ namespace partiality{
     }
   }
 
+  void test_predict(){
+    struct source source;
+    source.flx = 7.0;
+    source.kin(0) = 0;
+    source.kin(1) = 0;
+    source.kin(2) = 101;
+    source.S12 = zeros_matrix<double>(3,3);
+    source.S12(0,0) = 1e-4;
+    source.S12(1,1) = 1e-4;
+    source.S12(2,2) = 1;
+    random_device rd;
+    uniform_real_distribution<double> udistr(-2,2);
+    uniform_int_distribution<int32_t> idistr(-5,5);
+    exponential_distribution<double> edistr;
+    struct crystl crystl;
+    crystl.R = zeros_matrix<double>(3,3);
+    while ((det(crystl.R)<0.25)||(det(crystl.R)>1))
+      for (size_t i=0;i!=3;++i)
+        for (size_t j=0;j!=3;++j)
+          crystl.R(i,j) = udistr(rd);
+    crystl.U = inv(crystl.R);
+    crystl.mosaicity = udistr(rd)*udistr(rd)*udistr(rd)*udistr(rd);
+    for (size_t i=0;i!=3;++i)
+      for (size_t j=0;j!=3;++j)
+        crystl.peak(i,j) = udistr(rd)*1e-2;
+    crystl.peak=crystl.peak*trans(crystl.peak);
+    crystl.strain = edistr(rd)*1e-3;
+    crystl.a = 1+edistr(rd)*16;
+    crystl.b = udistr(rd)*1e-2;
+    test_predict(source,crystl);
+  }
+
   const double wout_target(
       const source& source,
       const crystl& crystl,
@@ -1150,7 +1161,8 @@ namespace partiality{
     const matrix<double,2,2> iS2 =
       trans(P1)*(rotation_matrix(w,z)*(trans(P0)*inv(S)*P0))*P1;
     const double flx =
-        get<0>(predict(w,zeros_matrix<double>(3,3),hkl,source,crystl))
+        source.flx
+      * get<0>(predict(w,zeros_matrix<double>(3,3),hkl,source,crystl))
       * 2*pi/sqrt(det(iS2));
     return flx;
   }
@@ -1200,6 +1212,7 @@ namespace partiality{
         todo.push_back({get<0>(hkl)  ,get<1>(hkl)  ,get<2>(hkl)-1});
         todo.push_back({get<0>(hkl)  ,get<1>(hkl)  ,get<2>(hkl)+1});
         candidates.push_back(hkl);
+        //cerr << get<0>(hkl) << " " << get<1>(hkl) << " " << get<2>(hkl) << endl;
         continue;
       }
       return candidates;
@@ -1212,6 +1225,7 @@ namespace partiality{
       ){
     vector<tuple<tuple<int,int,int>,double,matrix<double,3,1>>> prediction;
     const auto candidates = get_candidates(average_source(sources),crystl);
+    cerr << "there are " << candidates.size() << " candidates" << endl;
     prediction.reserve(candidates.size());
     for (const auto& hkl : candidates) {
       double flx = 0;
@@ -1223,8 +1237,12 @@ namespace partiality{
             hkl,
             optimize_wout(source,crystl,hkl)
           );
-      //cerr << flx << endl;
+      if (isnan(flx)) continue;
       if (flx<min_flx) continue;
+      //cerr << flx << " "
+      //     << get<0>(hkl) << " "
+      //     << get<1>(hkl) << " "
+      //     << get<2>(hkl) << endl;
       const matrix<double,3,1> w =
         optimize_wout(average_source(sources),crystl,hkl);
       prediction.emplace_back(hkl,flx,w);
@@ -1268,7 +1286,7 @@ namespace partiality{
         const matrix<double,3,1> n =
           normalize(cross_product(panel.D*fs,panel.D*ss));
         //cerr << pow(double(trans(w)*n),2u) << endl;
-        if (pow(double(trans(w)*n),2u)<0.01) continue;        
+        if (pow(double(trans(w)*n),2u)<0.01) continue;
         matrix<double,3,1> y = w;
         matrix<double,2,1> fsss = panel(y);
         const matrix<double,3,2> P =
@@ -1355,6 +1373,7 @@ namespace partiality{
           struct crystl
         >>;
     const auto source = average_source(sources);
+    //cerr << "projecting and filtering" << endl;
     const auto projections =
       filter_and_project
         (
@@ -1363,10 +1382,12 @@ namespace partiality{
           geom,
           predict_integrals(sources,crystl,min_flx)
         );
-    cerr << "number of projections after filter: " << projections.size() << endl;
+    //cerr << "number of projections after filter: " << projections.size() << endl;
     vector<tuple<IDX,reflection>> prediction;
     size_t counter = 0;
     for (const auto& [hkl,flx,p,m0,_S] : projections) {
+      const double _flx = flx;
+      //cerr << get<0>(hkl) << " " << get<1>(hkl) << " " << get<2>(hkl) << endl;
       double integral = 0;
       //cerr << counter++ << " ";
       const matrix<double,2,2>  S = _S+identity_matrix<double>(2)/2;
@@ -1433,6 +1454,23 @@ namespace partiality{
                     crystl
                   )
                 );
+                if constexpr (false) {
+                  auto crystl_p = crystl;
+                  auto crystl_m = crystl;
+                  crystl_p.a+=1e-8;
+                  crystl_m.a-=1e-8;
+                  patchmap<tuple<size_t,int>,tuple<double,double,double>> data;
+                  const auto prediction = predict(w,psf,hkl,source,crystl);
+                  const auto prediction_p = predict(w,psf,hkl,source,crystl_p);
+                  const auto prediction_m = predict(w,psf,hkl,source,crystl_m);
+                  cout << get<3>(prediction).a << " "
+                       << (get<0>(prediction_p)-get<0>(prediction_m))/2e-8<<" "
+                       << get<4>(prediction).a << " "
+                       << (get<1>(prediction_p)-get<1>(prediction_m))/2e-8<<" "
+                       << get<5>(prediction).a << " "
+                       << (get<2>(prediction_p)-get<2>(prediction_m))/2e-8<<" "
+                       << endl;
+                }
               }
             }
           }
@@ -1440,26 +1478,35 @@ namespace partiality{
             auto& [i,flx,wvn,bnd,dflx,dwvn,dbnd]=
               get<1>(prediction.back()).back();
             flx  += pflx;
-            wvn  += pflx*pwvn;
+            wvn  += pflx*pwvn;//wvn  += pwvn;
             bnd  += pflx*pbnd;
             dflx += pdflx;
             dwvn += pdflx*pwvn+pdwvn*pflx;
             dbnd += pdflx*pbnd+pdbnd*pflx;
           }
           {
+            const double o = oversampling;
             matrix<double,3,1> v0 =
               normalize((*p)(matrix<double,2,1>{fs+0.0,ss+0.0}));
             matrix<double,3,1> v1 =
-              normalize((*p)(matrix<double,2,1>{fs+1.0,ss+0.0}));
+              normalize((*p)(matrix<double,2,1>{fs+1.0/o,ss+0.0}));
             matrix<double,3,1> v2 =
-              normalize((*p)(matrix<double,2,1>{fs+0.0,ss+1.0}));
+              normalize((*p)(matrix<double,2,1>{fs+0.0,ss+1.0/o}));
             matrix<double,3,1> v3 =
-              normalize((*p)(matrix<double,2,1>{fs+1.0,ss+1.0}));
+              normalize((*p)(matrix<double,2,1>{fs+1.0/o,ss+1.0/o}));
             const double area = length(v1-v0)*length(v2-v0);
-            integral += flx*area;
+            integral += flx;
+            //cerr << integral << " " << flx << " "
+            //     << area << " " << _flx << endl;
           }
           wvn  /= flx;
+          dwvn *= 1.0/flx;
           dwvn -= dflx*(wvn/flx);
+          // there is some numerical instability somewhere in the lines above
+          // that's why I think I have to do this, but it can only ever be 0
+          // so it's fine
+          dwvn.a = 0;
+          dwvn.b = 0;
           for (const auto& [pflx,pwvn,pbnd,pdflx,pdwvn,pdbnd] : p_predictions) {
             auto& [i,flx,wvn,bnd,dflx,dwvn,dbnd]=
               get<1>(prediction.back()).back();
@@ -1467,15 +1514,24 @@ namespace partiality{
             dbnd += pdflx*pow(pwvn-wvn,2u)+(pdwvn-dwvn)*pflx*2*(pwvn-wvn);
           }
           bnd  /= flx;
+          dbnd *= 1.0/flx;
           dbnd -= dflx*(bnd/flx);
+          // there is some numerical instability somewhere in the lines above
+          // that's why I think I have to do this, but it can only ever be 0
+          // so it's fine
+          dbnd.a = 0;
+          dbnd.b = 0;
         }
       }
       //cerr << flx << " " << integral << endl;
       if (prediction.size())
         if (get<0>(prediction.back())==hkl) 
-          if (integral<min_flx)
+          if (integral<min_flx) {
+            //cerr << integral << " " << min_flx << endl;
             prediction.pop_back();
+          }
     }
+    //cerr << "prediction end" << endl;
     return prediction;
   }
 
@@ -2292,25 +2348,29 @@ namespace partiality{
     return predict<predict_mode::pixel_partiality,compute_derivatives,0,1>
       (sources,crystl,geom,fraction);
   }
+#endif
 
   template<class ifstream>
-  vector<tuple<double,source>> const inline deserialize_sources(ifstream& file){
-    vector<tuple<double,source>> sources;
+  vector<source> const inline deserialize_sources(ifstream& file){
+    vector<source> sources;
     uint64_t n;
     file.read(reinterpret_cast<char*>(&n),8);
     sources.resize(n); 
     for (size_t i=0;i!=n;++i){
-      struct source& source = get<1>(sources[i]);
-      file.read(reinterpret_cast<char*>(&get<0>(sources[i]   )),8);
-      file.read(reinterpret_cast<char*>(&source.win(0)        ),8);
-      file.read(reinterpret_cast<char*>(&source.win(1)        ),8);
-      file.read(reinterpret_cast<char*>(&source.win(2)        ),8);
-      file.read(reinterpret_cast<char*>(&source.wvn           ),8);
-      file.read(reinterpret_cast<char*>(&source.bnd           ),8);
-      double div;
-      file.read(reinterpret_cast<char*>(&div),8);
-      source.div = pow(div,2u)*(identity_matrix<double>(3)
-                   -source.win*trans(source.win));
+      struct source& source = sources[i];
+      file.read(reinterpret_cast<char*>(&source.flx           ),8);
+      file.read(reinterpret_cast<char*>(&source.kin(0)        ),8);
+      file.read(reinterpret_cast<char*>(&source.kin(1)        ),8);
+      file.read(reinterpret_cast<char*>(&source.kin(2)        ),8);
+      file.read(reinterpret_cast<char*>(&source.S12(0,0)      ),8);
+      file.read(reinterpret_cast<char*>(&source.S12(0,1)      ),8);
+      source.S12(1,0)=source.S12(0,1);
+      file.read(reinterpret_cast<char*>(&source.S12(0,2)      ),8);
+      source.S12(2,0)=source.S12(0,2);
+      file.read(reinterpret_cast<char*>(&source.S12(1,1)      ),8);
+      file.read(reinterpret_cast<char*>(&source.S12(1,2)      ),8);
+      source.S12(2,1)=source.S12(1,2);
+      file.read(reinterpret_cast<char*>(&source.S12(2,2)      ),8);
     }
     return sources;
   }
@@ -2333,11 +2393,18 @@ namespace partiality{
       file.read(reinterpret_cast<char*>(&crystl.R(2,0)   ),8);
       file.read(reinterpret_cast<char*>(&crystl.R(2,1)   ),8);
       file.read(reinterpret_cast<char*>(&crystl.R(2,2)   ),8);
+      file.read(reinterpret_cast<char*>(&crystl.peak(0,0)),8); 
+      file.read(reinterpret_cast<char*>(&crystl.peak(0,1)),8);
+      crystl.peak(1,0) = crystl.peak(0,1);
+      file.read(reinterpret_cast<char*>(&crystl.peak(0,2)),8); 
+      crystl.peak(2,0) = crystl.peak(0,2);
+      file.read(reinterpret_cast<char*>(&crystl.peak(1,1)),8); 
+      file.read(reinterpret_cast<char*>(&crystl.peak(1,2)),8); 
+      crystl.peak(2,1) = crystl.peak(1,2);
+      file.read(reinterpret_cast<char*>(&crystl.peak(2,2)),8); 
       crystl.U = inv(crystl.R);
       file.read(reinterpret_cast<char*>(&crystl.mosaicity),8);
-      file.read(reinterpret_cast<char*>(&peak            ),8);
       file.read(reinterpret_cast<char*>(&crystl.strain   ),8);
-      crystl.peak = pow(peak,2u)*identity_matrix<double>(3);
       file.read(reinterpret_cast<char*>(&crystl.a        ),8);
       file.read(reinterpret_cast<char*>(&crystl.b        ),8);
     }
@@ -2346,12 +2413,13 @@ namespace partiality{
  
   template<class ifstream,class ofstream>
   const inline void sources_ascii2bin(ifstream& in,ofstream& out){
-    vector<array<double,7>> buffer;
+    constexpr size_t n_elems = 10;
+    vector<array<double,n_elems>> buffer;
     while (in){
       if (in.peek()=='>'){
         in.get();
         buffer.push_back({});
-        for (size_t i=0;i!=7;++i){
+        for (size_t i=0;i!=n_elems;++i){
           in >> buffer.back()[i];
         }
         in.ignore(numeric_limits<std::streamsize>::max(),'\n');
@@ -2362,18 +2430,19 @@ namespace partiality{
     const uint64_t n = buffer.size();
     out.write(reinterpret_cast<const char*>(&n),8);
     for (auto it=buffer.begin();it!=buffer.end();++it)
-      for (size_t i=0;i!=7;++i)
+      for (size_t i=0;i!=n_elems;++i)
         out.write(reinterpret_cast<char*>(&((*it)[i])),8);
   }
   
   template<class ifstream,class ofstream>
   const inline void crystls_ascii2bin(ifstream& in,ofstream& out){
-    vector<array<double,14>> buffer;
+    constexpr size_t n_elems = 19;
+    vector<array<double,n_elems>> buffer;
     while (in){
       if (in.peek()=='<'){
         in.get();
         buffer.push_back({});
-        for (size_t i=0;i!=14;++i) in >> buffer.back()[i];
+        for (size_t i=0;i!=n_elems;++i) in >> buffer.back()[i];
         in.ignore(numeric_limits<std::streamsize>::max(),'\n');
       } else {
         break;
@@ -2382,9 +2451,8 @@ namespace partiality{
     const uint64_t n = buffer.size();
     out.write(reinterpret_cast<const char*>(&n),8);
     for (auto it=buffer.begin();it!=buffer.end();++it)
-      for (size_t i=0;i!=14;++i)
+      for (size_t i=0;i!=n_elems;++i)
         out.write(reinterpret_cast<char*>(&((*it)[i])),8);
   }
-#endif
 }
 #endif // PARTIALITY_H
