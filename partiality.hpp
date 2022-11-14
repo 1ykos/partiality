@@ -2,6 +2,7 @@
 #define PARTIALITY_H
 
 #include <array>
+#include <execution>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -65,6 +66,7 @@ namespace partiality{
   using std::cout;
   using std::end;
   using std::endl;
+  using std::exponential_distribution;
   using std::fill;
   using std::fixed;
   using std::floor;
@@ -73,6 +75,7 @@ namespace partiality{
   using std::getline;
   using std::ifstream;
   using std::invoke_result;
+  using std::isfinite;
   using std::isnan;
   using std::istream;
   using std::make_tuple;
@@ -85,7 +88,6 @@ namespace partiality{
   using std::numeric_limits;
   using std::ofstream;
   using std::random_device;
-  using std::exponential_distribution;
   using std::ref;
   using std::remainder;
   using std::round;
@@ -111,10 +113,10 @@ namespace partiality{
   using wmath::inverf;
   using wmath::log2;
   using wmath::mean_variance;
-  using wmath::mean_variance_M2_dw_acc;
-  using wmath::mean_variance_M2_dw_ini;
-  using wmath::mean_variance_M2_dx_acc;
-  using wmath::mean_variance_M2_dx_ini;
+  using wmath::mean_variance_var_dw_acc;
+  using wmath::mean_variance_var_dw_ini;
+  using wmath::mean_variance_var_dx_acc;
+  using wmath::mean_variance_var_dx_ini;
   using wmath::mean_variance_mean_dw;
   using wmath::mean_variance_mean_dx;
   using wmath::mean_variance_sumw_dw;
@@ -124,6 +126,48 @@ namespace partiality{
   using wmath::rol;
 
   using namespace std::placeholders;
+
+  template<long n>
+  const matrix<double,n,1>
+  half_xT_S_x_dx
+  (
+    const matrix<double,n,1>& x,
+    const matrix<double,n,n>& S
+  )
+  {
+    return S*x;
+  }
+  
+  template<long n>
+  const matrix<double,n,1>
+  half_xT_S_x_dS
+  (
+    const matrix<double,n,1>& x,
+    const matrix<double,n,n>& S
+  )
+  {
+    return trans(x)*x;
+  }
+
+  template<long n>
+  const matrix<double,n,n>
+  adj
+  (
+    const matrix<double,n,n>& A
+  )
+  {
+    return det(A)*inv(A);
+  }
+
+  template<long n>
+  const matrix<double,n,n>
+  det_A_da
+  (
+    const matrix<double,n,n>& A
+  )
+  {
+    return trans(det(A)*inv(A));
+  }
 
   typedef tuple<int32_t,int32_t,int32_t> IDX;
 
@@ -192,7 +236,15 @@ namespace partiality{
      a(0)*b(1)-a(1)*b(0)};
   }
 
-  double solid_angle(
+  double inline surface_area_triangle(
+      const matrix<double,3,1>& v0,
+      const matrix<double,3,1>& v1,
+      const matrix<double,3,1>& v2
+      ) {
+    return 0.5*length(cross_product(v1-v0,v2-v0));
+  }
+
+  double inline solid_angle( // of triangle
       const matrix<double,3,1> v0,
       const matrix<double,3,1> v1,
       const matrix<double,3,1> v2
@@ -200,7 +252,37 @@ namespace partiality{
     const matrix<double,3,1> n0 = normalize(v0);
     const matrix<double,3,1> n1 = normalize(v1);
     const matrix<double,3,1> n2 = normalize(v2);
-    return length(cross_product(n1-n0,n2-n0));
+    return surface_area_triangle(n0,n1,n2);
+  }
+  
+  double inline surface_area_quadrilateral(
+      const matrix<double,3,1>& v0,
+      const matrix<double,3,1>& v1,
+      const matrix<double,3,1>& v2,
+      const matrix<double,3,1>& v3
+      ) {
+    const matrix<double,3,1> m = 0.25*(v0+v1+v2+v3);
+    return 0.5*(length(cross_product(v0-m,v1-m))
+               +length(cross_product(v1-m,v2-m))
+               +length(cross_product(v2-m,v3-m))
+               +length(cross_product(v3-m,v0-m)));
+  }
+  
+  /* v0--v3
+   * |   |
+   * v1--v2
+   */
+  double inline solid_angle( // of square
+      const matrix<double,3,1> v0,
+      const matrix<double,3,1> v1,
+      const matrix<double,3,1> v2,
+      const matrix<double,3,1> v3
+      ) {
+    const matrix<double,3,1> n0 = normalize(v0);
+    const matrix<double,3,1> n1 = normalize(v1);
+    const matrix<double,3,1> n2 = normalize(v2);
+    const matrix<double,3,1> n3 = normalize(v2);
+    return surface_area_quadrilateral(n0,n1,n2,n3);
   }
   
   matrix<double,3,3> inline P_rotation(
@@ -226,7 +308,7 @@ namespace partiality{
   }
   
   // rotate two normalized vectors onto another
-  matrix<double,3,3> const rotation_matrix(
+  inline matrix<double,3,3> const rotation_matrix(
       const matrix<double,3,1>& v0,
       const matrix<double,3,1>& v1
       ) {
@@ -242,7 +324,7 @@ namespace partiality{
   
   // rotate two normalized vectors onto another by mirroring twice
   // not tested
-  matrix<double,3,3> const rotation_matrix_v1(
+  inline matrix<double,3,3> const rotation_matrix_v1(
       const matrix<double,3,1>& v0,
       const matrix<double,3,1>& v1
       ) {
@@ -254,7 +336,7 @@ namespace partiality{
     return M1*M0;
   }
 
-  matrix<double,3,3> const rotation_matrix(
+  inline matrix<double,3,3> const rotation_matrix(
       const double a,
       const matrix<double,3,1>& u
       ) {
@@ -271,10 +353,11 @@ namespace partiality{
   }
 
   struct source{
-    double flx = 1.0;        // photon flux
-    matrix<double,3,1> kin;  // incoming wave vector
-    matrix<double,3,3> S12;  // divergence and bandwidth *not squared*
-    matrix<double,3,3> S12w(const matrix<double,3,1>& w) const {
+    double flx = 1.0;                                   // photon flux
+    matrix<double,3,1> kin = zeros_matrix<double>(3,1); // incoming wave vector
+    // divergence and bandwidth *not squared*
+    matrix<double,3,3> S12 = zeros_matrix<double>(3,3); 
+    inline matrix<double,3,3> S12w(const matrix<double,3,1>& w) const {
       const matrix<double,3,1> win   = normalize(kin);
       const matrix<double,3,3> R     = rotation_matrix(win,w);
       // isolate contribution in direction of wave vector aka bandwidth
@@ -287,19 +370,19 @@ namespace partiality{
       //cerr << 0.03*0.03*(w-win)*trans(w-win) << endl;
       return S12_w;
     }
-    matrix<double,3,3> Sw(const matrix<double,3,1>& w) const {
+    inline matrix<double,3,3> Sw(const matrix<double,3,1>& w) const {
       const matrix<double,3,3> S12_w = S12w(w);
       return S12_w*trans(S12_w);
     }
     // area of ewald sphere without width
-    const double ewald_width(const matrix<double,3,1>& w) const {
+    const inline double ewald_width(const matrix<double,3,1>& w) const {
       return trans(w)*S12w(w)*w;
     }
-    const double area() const {
+    const inline double area() const {
       return 4*pi*length_squared(kin);
     }
     // volume of ewald sphere of given width 
-    const double volume(const matrix<double,3,1>& w) const {
+    const inline double volume(const matrix<double,3,1>& w) const {
       return sqrt(2*pi)*ewald_width(w)*area();
     }
   };
@@ -313,31 +396,35 @@ namespace partiality{
     double strain=0;                                    // crystal strain
     // scaling parameters a exp( - 0.5 b q² )
     double a=0.0,b=0.0;
-    double scaling(const matrix<double,3,1>& x) const {
+    double inline scaling(const matrix<double,3,1>& x) const {
       return a*exp(-0.5*b*length_squared(x));
     }
-    matrix<double,3,1> scaling_dx(const matrix<double,3,1>& x) const {
+    matrix<double,3,1> inline scaling_dx(const matrix<double,3,1>& x) const {
       return -b*scaling(x)*x;
     }
-    double scaling_da(const matrix<double,3,1>& x) const {
+    double inline scaling_da(const matrix<double,3,1>& x) const {
       return exp(-0.5*b*length_squared(x));
     }
-    double scaling_db(const matrix<double,3,1>& x) const {
+    double inline scaling_db(const matrix<double,3,1>& x) const {
       return -0.5*length_squared(x)*scaling(x);
     }
-    matrix<double,3,3> S_mosaicity(const matrix<double,3,1>& x ) const {
+    matrix<double,3,3> inline S_mosaicity(const matrix<double,3,1>& x ) const {
       const double m2 = mosaicity*mosaicity;
       const double nx2 = length_squared(x);
-      return m2*(nx2*identity_matrix<double>(3)-x*trans(x));
+      const matrix<double,3,3> I = identity_matrix<double>(3);
+      return m2*(nx2*I-x*trans(x));
     }
     matrix<double,3,3> inline S_strain(const matrix<double,3,1> x ) const {
       const double s2 = strain*strain;
       return s2*x*trans(x);
     }
-    matrix<double,3,3> S(const matrix<double,3,1>& x) const {
+    matrix<double,3,3> inline S(const matrix<double,3,1>& x) const {
       return peak + S_mosaicity(x) + S_strain(x);
     }
-    crystl& operator+=(const crystl& o) {
+    matrix<double,3,3> inline S2(const matrix<double,3,1>& x) const {
+      return trans(peak)*peak + S_mosaicity(x) + S_strain(x);
+    }
+    inline crystl& operator+=(const crystl& o) {
       U         += o.U;
       R         += o.R;
       mosaicity += o.mosaicity;
@@ -347,7 +434,7 @@ namespace partiality{
       b         += o.b;
       return *this;
     }
-    crystl& operator-=(const crystl& o) {
+    inline crystl& operator-=(const crystl& o) {
       U         -= o.U;
       R         -= o.R;
       mosaicity -= o.mosaicity;
@@ -357,15 +444,15 @@ namespace partiality{
       b         -= o.b;
       return *this;
     }
-    crystl operator+(const crystl& o) const {
+    inline crystl operator+(const crystl& o) const {
       struct crystl result = *this;
       return (result+=o);
     }
-    crystl operator-(const crystl& o) const {
+    inline crystl operator-(const crystl& o) const {
       struct crystl result = *this;
       return (result-=o);
     }
-    crystl& operator*=(const double c) {
+    inline crystl& operator*=(const double c) {
       U         *= c;
       R         *= c;
       mosaicity *= c;
@@ -375,16 +462,133 @@ namespace partiality{
       b         *= c;
       return *this;
     }
-    crystl operator*(const double c) const {
+    inline crystl operator*(const double c) const {
       struct crystl result = *this;
       return (result*=c);
     }
-    crystl operator/(const double c) const {
-      const double d = 1.0/c;
+    inline crystl operator/(const double c) const {
       return (*this)*(1.0/c);
     }
   };
 
+  // value, dcrystl, dx
+  const tuple<double,crystl,matrix<double,3,1>>
+  exponential(
+      const matrix<double,3,1>& x,
+      const matrix<double,3,1>& m,
+      const matrix<double,3,1>& w,
+      const struct source& source,
+      const struct crystl& crystl
+  )
+  {
+    const matrix<double,3,3>  S0 = source.Sw(w);
+    const matrix<double,3,3>  S1 = crystl.S2(x);
+    const matrix<double,3,3>  S  = S0+S1;
+    const matrix<double,3,3> iS  = inv(S);
+    const matrix<double,3,1> d   = x-m;
+    const double e = exp(-0.5*trans(x-m)*iS*(x-m));
+    struct crystl J;
+    J.U = zeros_matrix<double>(3,3);
+    J.R = zeros_matrix<double>(3,3);
+    J.mosaicity =
+      e*trans(d)*iS*crystl.S_mosaicity(x)/crystl.mosaicity*iS*d;
+    J.peak = e*crystl.peak*iS*d*trans(d)*iS;
+    J.strain = crystl.strain*e*trans(x)*iS*d*trans(d)*iS*x;
+    J.a = 0.0;
+    J.b = 0.0;
+    // const matrix<double,3,3> t0 = x*trans(x); // unused
+    const matrix<double,3,1> t1 = d;
+    const double t2             = pow(crystl.mosaicity,2);
+    const double t3             = pow(crystl.strain,2);
+    const matrix<double,3,3> t4 = iS;
+    const matrix<double,3,1> t5 = t4*t1;
+    const double t6             = e;
+    const double t7             = t2*t6;
+    const matrix<double,3,1> t8 = double(trans(t1)*t4*x)*t5;
+    const matrix<double,3,1> dx = -t6*t5+double(t7*trans(t1)*t4*t5)*x-t7*t8+t3*t6*t8;
+    return {e,J,dx};
+  }
+  
+  const inline tuple<double,crystl>
+  exponential(
+      const IDX& hkl,
+      const matrix<double,3,1>& m,
+      const matrix<double,3,1>& w,
+      const struct source& source,
+      const struct crystl& crystl
+  )
+  {
+    const matrix<double,3,1> dhkl
+      {1.0*get<0>(hkl),1.0*get<1>(hkl),1.0*get<2>(hkl)};
+    const matrix<double,3,1> x = crystl.R*dhkl;
+    auto [e,J,dx] = exponential(x,m,w,source,crystl);
+    J.R = dx*trans(dhkl);// *trans(dx);
+    J.U = -trans(crystl.R)*J.R*trans(crystl.R);
+    return {e,J};
+  }
+
+  const tuple<double,crystl,matrix<double,3,1>>
+  exponential2(
+      const matrix<double,3,1>& x,
+      const matrix<double,3,1>& m,
+      const matrix<double,3,1>& w,
+      const struct source& source,
+      const struct crystl& crystl
+  )
+  {
+    const matrix<double,3,3>  S0 = source.Sw(w);
+    const matrix<double,3,3>  S1 = crystl.S2(x);
+    const matrix<double,3,3>  S  = S0+S1;
+    const matrix<double,3,3> iS  = inv(S);
+    const matrix<double,3,1> d   = x-m;
+    const double             v   = trans(w)*S*w;
+    const double e = exp(-0.5*trans(x-m)*(x-m)/(trans(w)*S*w));
+    struct crystl J;
+    J.U = zeros_matrix<double>(3,3);
+    J.R = zeros_matrix<double>(3,3);
+    J.mosaicity =
+      e*trans(d)*d*trans(w)*crystl.S_mosaicity(x)/crystl.mosaicity*w/(v*v);
+    J.peak      = e/(v*v)*double(trans(d)*d)*crystl.peak*w*trans(w);
+    J.strain    = crystl.strain*e*trans(x)*w*double(trans(d)*d)*double(trans(w)*x)/(v*v);
+    J.a = 0.0;
+    J.b = 0.0;
+    const matrix<double,3,3> t1 = x*trans(x);
+    const double t2             = pow(crystl.mosaicity,2);
+    const double t3             = pow(crystl.strain,2);
+    const double t5             = trans(d)*d;
+    const double t6             = e;
+    const double t8             = (t2*t5*e)/(v*v);
+    const matrix<double,3,1> t9 = double(trans(w)*x)*w;
+    const matrix<double,3,1> dx =
+      - e/v*d
+      + t8*double(trans(w)*w)*x
+      - t8*t9
+      + t3*t5*e/(v*v)*t9;
+    if (isnan(e)) {
+      struct crystl J;
+      return {0.0,J,zeros_matrix<double>(3,1)};
+    }
+    return {e,J,dx};
+  }
+  
+  const inline tuple<double,crystl>
+  exponential2(
+      const IDX& hkl,
+      const matrix<double,3,1>& w,
+      const struct source& source,
+      const struct crystl& crystl
+  )
+  {
+    const matrix<double,3,1> dhkl
+      {1.0*get<0>(hkl),1.0*get<1>(hkl),1.0*get<2>(hkl)};
+    const matrix<double,3,1> x = crystl.R*dhkl;
+    const matrix<double,3,1> m = w*length(source.kin)-source.kin;
+    auto [e,J,dx] = exponential2(x,m,w,source,crystl);
+    J.R = dx*trans(dhkl);// *trans(dx);
+    J.U = -trans(crystl.R)*J.R*trans(crystl.R);
+    return {e,J};
+  }
+  
   source const inline average_source(
       const vector<source>& sources
       ) {
@@ -737,7 +941,6 @@ namespace partiality{
       const double             t6 = 2*crystl.mosaicity;
       const matrix<double,3,1> t7 = T3*x;
       const double             t8 = length_squared(dw);
-
       dwvn.mosaicity =
          t6*trans(dw)*T5*T3*T2*T3*T5*(t7+T4*p)/t8
        - t6*trans(dw)*T5*T3*T2*t7/t8;
@@ -819,238 +1022,7 @@ namespace partiality{
     return make_tuple(flx,wvn,bnd,dflx,dwvn,dbnd);
   }
   
-  void test_predict(
-      const struct source& source,
-      const struct crystl& crystl
-      ) {
-    IDX idx;
-    matrix<double,3,1> max_y;
-    double max_flx = 0;
-    random_device rd;
-    uniform_real_distribution<double> udistr(-2,2);
-    uniform_int_distribution<int32_t> idistr(-20,20);
-    exponential_distribution<double> edistr;
-    for (size_t i=0;i!=1u<<24;++i) {
-      const matrix<double,3,1> w =
-        normalize(matrix<double,3,1>{udistr(rd),udistr(rd),4+udistr(rd)});
-      const matrix<double,3,3> psf =
-        (identity_matrix<double>(3)-w*trans(w))/pow(32,2);
-      IDX _idx{idistr(rd),idistr(rd),idistr(rd)};
-      while (!get<0>(_idx)) get<0>(_idx) = idistr(rd);
-      while (!get<1>(_idx)) get<1>(_idx) = idistr(rd);
-      while (!get<2>(_idx)) get<2>(_idx) = idistr(rd);
-      const auto result = predict(w,psf,_idx,source,crystl);
-      if (get<0>(result)>=max_flx) {
-        max_flx = get<0>(result);
-        max_y = 512*w;
-        idx = _idx; 
-      } else if (get<0>(result)<0) {
-        cerr << "predicting negative flux, this must not happen" << endl;
-        exit(1);
-      }
-    }
-    for (int i=-16;i<=16;++i) {
-      for (int j=-16;j<=16;++j) {
-        matrix<double,3,1> y = max_y;
-        y(0)+=i;
-        y(1)+=j;
-        const matrix<double,3,1> w = normalize(y);
-        const matrix<double,3,3> psf =
-          (identity_matrix<double>(3)-w*trans(w))*pow(512,-2);
-        const auto prediction = predict(w,psf,idx,source,crystl);
-        if (get<0>(prediction)<1e-20) continue;
-        cout << setw(16) << get<0>(prediction) << " "
-             << setw(15) << get<1>(prediction) << " "
-             << setw(15) << get<2>(prediction) << endl;
-        struct crystl dflx;
-        struct crystl dwvn;
-        struct crystl dbnd;
-        for (size_t i=0;i!=3;++i) for (size_t j=0;j!=3;++j) {
-          const double  eps = 1e-8;
-          struct crystl plus  = crystl;
-          plus.R(i,j)+=eps;
-          plus.U = inv(plus.R);
-          struct crystl minu = crystl;
-          minu.R(i,j)-=eps;
-          minu.U = inv(minu.R);
-          const auto pv = predict(w,psf,idx,source,plus);
-          const auto mv = predict(w,psf,idx,source,minu);
-          dflx.R(i,j) = (get<0>(pv)-get<0>(mv))/(plus.R(i,j)-minu.R(i,j));
-          dwvn.R(i,j) = (get<1>(pv)-get<1>(mv))/(plus.R(i,j)-minu.R(i,j));
-          dbnd.R(i,j) = (get<2>(pv)-get<2>(mv))/(plus.R(i,j)-minu.R(i,j));
-        }
-        for (size_t i=0;i!=3;++i) for (size_t j=0;j!=3;++j) {
-          const double  eps = 1e-8;
-          struct crystl plus  = crystl;
-          plus.U(i,j)+=eps;
-          plus.R = inv(plus.U);
-          struct crystl minu = crystl;
-          minu.U(i,j)-=eps;
-          minu.R = inv(minu.U);
-          const auto pv = predict(w,psf,idx,source,plus);
-          const auto mv = predict(w,psf,idx,source,minu);
-          dflx.U(i,j) = (get<0>(pv)-get<0>(mv))/(plus.U(i,j)-minu.U(i,j));
-          dwvn.U(i,j) = (get<1>(pv)-get<1>(mv))/(plus.U(i,j)-minu.U(i,j));
-          dbnd.U(i,j) = (get<2>(pv)-get<2>(mv))/(plus.U(i,j)-minu.U(i,j));
-        }
-        {
-          const double eps = 1e-4;
-          struct crystl plus = crystl;
-          plus.mosaicity*=1+eps;
-          struct crystl minu = crystl;
-          minu.mosaicity*=1-eps;
-          const auto pv = predict(w,psf,idx,source,plus);
-          const auto mv = predict(w,psf,idx,source,minu);
-          dflx.mosaicity = (get<0>(pv)-get<0>(mv))
-            /(plus.mosaicity-minu.mosaicity);
-          dwvn.mosaicity = (get<1>(pv)-get<1>(mv))
-            /(plus.mosaicity-minu.mosaicity);
-          dbnd.mosaicity = (get<2>(pv)-get<2>(mv))
-            /(plus.mosaicity-minu.mosaicity);
-        }
-        for (size_t i=0;i!=3;++i) for (size_t j=0;j!=3;++j) {
-          const double eps = 1e-8;
-          struct crystl plus = crystl;
-          plus.peak(i,j)+=eps;
-          struct crystl minu = crystl;
-          minu.peak(i,j)-=eps;
-          const auto pv = predict(w,psf,idx,source,plus);
-          const auto mv = predict(w,psf,idx,source,minu);
-          dflx.peak(i,j) = (get<0>(pv)-get<0>(mv))
-                          /(plus.peak(i,j)-minu.peak(i,j));
-          dwvn.peak(i,j) = (get<1>(pv)-get<1>(mv))
-                          /(plus.peak(i,j)-minu.peak(i,j));
-          dbnd.peak(i,j) = (get<2>(pv)-get<2>(mv))
-                          /(plus.peak(i,j)-minu.peak(i,j));
-        }
-        {
-          const double eps = 1e-6;
-          struct crystl plus = crystl;
-          plus.strain*=1+eps;
-          struct crystl minu = crystl;
-          minu.strain*=1-eps;
-          const auto pv = predict(w,psf,idx,source,plus);
-          const auto mv = predict(w,psf,idx,source,minu);
-          dflx.strain = (get<0>(pv)-get<0>(mv))
-            /(plus.strain-minu.strain);
-          dwvn.strain = (get<1>(pv)-get<1>(mv))
-            /(plus.strain-minu.strain);
-          dbnd.strain = (get<2>(pv)-get<2>(mv))
-            /(plus.strain-minu.strain);
-        }
-        {
-          const double eps = 1e-6;
-          struct crystl plus = crystl;
-          plus.a*=1+eps;
-          struct crystl minu = crystl;
-          minu.a*=1-eps;
-          const auto pv = predict(w,psf,idx,source,plus);
-          const auto mv = predict(w,psf,idx,source,minu);
-          dflx.a = (get<0>(pv)-get<0>(mv))/(plus.a-minu.a);
-          dwvn.a = (get<1>(pv)-get<1>(mv))/(plus.a-minu.a);
-          dbnd.a = (get<2>(pv)-get<2>(mv))/(plus.a-minu.a);
-        }
-        {
-          const double  eps = 1e-8;
-          struct crystl plus = crystl;
-          plus.b+=eps;
-          struct crystl minu = crystl;
-          minu.b-=eps;
-          const auto pv = predict(w,psf,idx,source,plus);
-          const auto mv = predict(w,psf,idx,source,minu);
-          dflx.b = (get<0>(pv)-get<0>(mv))/(plus.b-minu.b);
-          dwvn.b = (get<1>(pv)-get<1>(mv))/(plus.b-minu.b);
-          dbnd.b = (get<2>(pv)-get<2>(mv))/(plus.b-minu.b);
-        }
-        cerr << "dR" << endl;
-        for (size_t i=0;i!=3;++i) for (size_t j=0;j!=3;++j)
-          cerr << setw(16) << get<3>(prediction).R(i,j) << " "
-               << setw(15) << get<4>(prediction).R(i,j) << " "
-               << setw(15) << get<5>(prediction).R(i,j) << " "
-               << setw(15) << dflx.R(i,j) << " "
-               << setw(15) << dwvn.R(i,j) << " "
-               << setw(15) << dbnd.R(i,j) << endl;
-        cerr << "dU" << endl;
-        for (size_t i=0;i!=3;++i) for (size_t j=0;j!=3;++j)
-          cerr << setw(16) << get<3>(prediction).U(i,j) << " "
-               << setw(15) << get<4>(prediction).U(i,j) << " "
-               << setw(15) << get<5>(prediction).U(i,j) << " "
-               << setw(15) << dflx.U(i,j) << " "
-               << setw(15) << dwvn.U(i,j) << " "
-               << setw(15) << dbnd.U(i,j) << endl;
-        cerr << "dmosaicity" << endl;
-        cerr << setw(16) << get<3>(prediction).mosaicity << " "
-             << setw(15) << get<4>(prediction).mosaicity << " "
-             << setw(15) << get<5>(prediction).mosaicity << " "
-             << setw(15) << dflx.mosaicity << " "
-             << setw(15) << dwvn.mosaicity << " "
-             << setw(15) << dbnd.mosaicity << endl;
-        cerr << "dpeak" << endl;
-        for (size_t i=0;i!=3;++i) for (size_t j=0;j!=3;++j)
-          cerr << setw(16) << get<3>(prediction).peak(i,j) << " "
-               << setw(15) << get<4>(prediction).peak(i,j) << " "
-               << setw(15) << get<5>(prediction).peak(i,j) << " "
-               << setw(15) << dflx.peak(i,j) << " "
-               << setw(15) << dwvn.peak(i,j) << " "
-               << setw(15) << dbnd.peak(i,j) << endl;
-        cerr << "dstrain" << endl;
-        cerr << setw(16) << get<3>(prediction).strain << " "
-             << setw(15) << get<4>(prediction).strain << " "
-             << setw(15) << get<5>(prediction).strain << " "
-             << setw(15) << dflx.strain << " "
-             << setw(15) << dwvn.strain << " "
-             << setw(15) << dbnd.strain << endl;
-        cerr << "da" << endl;
-        cerr << setw(16) << get<3>(prediction).a << " "
-             << setw(15) << get<4>(prediction).a << " "
-             << setw(15) << get<5>(prediction).a << " "
-             << setw(15) << dflx.a << " "
-             << setw(15) << dwvn.a << " "
-             << setw(15) << dbnd.a << endl;
-        cerr << "db" << endl;
-        cerr << setw(16) << get<3>(prediction).b << " "
-             << setw(15) << get<4>(prediction).b << " "
-             << setw(15) << get<5>(prediction).b << " "
-             << setw(15) << dflx.b << " "
-             << setw(15) << dwvn.b << " "
-             << setw(15) << dbnd.b << endl;
-      }
-    }
-  }
-
-  void test_predict(){
-    struct source source;
-    source.flx = 7.0;
-    source.kin(0) = 0;
-    source.kin(1) = 0;
-    source.kin(2) = 101;
-    source.S12 = zeros_matrix<double>(3,3);
-    source.S12(0,0) = 1e-4;
-    source.S12(1,1) = 1e-4;
-    source.S12(2,2) = 1;
-    random_device rd;
-    uniform_real_distribution<double> udistr(-2,2);
-    uniform_int_distribution<int32_t> idistr(-5,5);
-    exponential_distribution<double> edistr;
-    struct crystl crystl;
-    crystl.R = zeros_matrix<double>(3,3);
-    while ((det(crystl.R)<0.25)||(det(crystl.R)>1))
-      for (size_t i=0;i!=3;++i)
-        for (size_t j=0;j!=3;++j)
-          crystl.R(i,j) = udistr(rd);
-    crystl.U = inv(crystl.R);
-    crystl.mosaicity = udistr(rd)*udistr(rd)*udistr(rd)*udistr(rd);
-    for (size_t i=0;i!=3;++i)
-      for (size_t j=0;j!=3;++j)
-        crystl.peak(i,j) = udistr(rd)*1e-2;
-    crystl.peak=crystl.peak*trans(crystl.peak);
-    crystl.strain = edistr(rd)*1e-3;
-    crystl.a = 1+edistr(rd)*16;
-    crystl.b = udistr(rd)*1e-2;
-    test_predict(source,crystl);
-  }
-
-  const double wout_target(
+  inline const double wout_target(
       const source& source,
       const crystl& crystl,
       const IDX& hkl,
@@ -1071,11 +1043,14 @@ namespace partiality{
     return trans(x-p)*inv(crystl.S(x)+source.Sw(w))*(x-p);
   }
   
-  matrix<double,3,1> optimize_wout(
+  const inline matrix<double,3,1> optimize_wout(
       const source& source,
       const crystl& crystl,
       const IDX& hkl,
-      const matrix<double,3,1> w0){
+      const matrix<double,3,1>& w0,
+      const size_t& n = 0
+    )
+  {
     const matrix<double,3,1> dhkl
     {
       1.0*get<0>(hkl),
@@ -1113,11 +1088,11 @@ namespace partiality{
     //cerr << wout_target(source,crystl,hkl,w) << " :" << endl;
     //cerr << trans(w);
     //cerr << wout_target(source,crystl,hkl,w+(wp/i)) << " :" << endl;
-    if (i>=(1u<<7)) return w;
-    return optimize_wout(source,crystl,hkl,w+(wp/i));
+    if ((i>=(1u<<7))||(n>8)) return w;
+    return optimize_wout(source,crystl,hkl,w+(wp/i),n+1);
   }
 
-  matrix<double,3,1> optimize_wout(
+  const inline matrix<double,3,1> optimize_wout(
       const source& source,
       const crystl& crystl,
       const IDX& hkl
@@ -1194,61 +1169,79 @@ namespace partiality{
       const struct source& source,
       const struct crystl& crystl
     )
-    {
-      vector<tuple<int,int,int>> todo;
-      todo.emplace_back(0,0,0);
-      patchmap<tuple<int,int,int>,void> done;
-      vector<tuple<int,int,int>> candidates;
-      while (todo.size()){
-        // cerr << todo.size() << endl;
-        const IDX hkl = todo.back(); todo.pop_back();
-        if (done.count(hkl)) continue;
-        done.insert(hkl);
-        if (!is_candidate(source,crystl,hkl)) continue;
-        todo.push_back({get<0>(hkl)-1,get<1>(hkl)  ,get<2>(hkl)  });
-        todo.push_back({get<0>(hkl)+1,get<1>(hkl)  ,get<2>(hkl)  });
-        todo.push_back({get<0>(hkl)  ,get<1>(hkl)-1,get<2>(hkl)  });
-        todo.push_back({get<0>(hkl)  ,get<1>(hkl)+1,get<2>(hkl)  });
-        todo.push_back({get<0>(hkl)  ,get<1>(hkl)  ,get<2>(hkl)-1});
-        todo.push_back({get<0>(hkl)  ,get<1>(hkl)  ,get<2>(hkl)+1});
-        candidates.push_back(hkl);
-        //cerr << get<0>(hkl) << " " << get<1>(hkl) << " " << get<2>(hkl) << endl;
-        continue;
-      }
-      return candidates;
+  {
+    vector<tuple<int,int,int>> todo;
+    todo.emplace_back(0,0,0);
+    patchmap<tuple<int,int,int>,void> done;
+    vector<tuple<int,int,int>> candidates;
+    while (todo.size()){
+      // cerr << todo.size() << endl;
+      const IDX hkl = todo.back(); todo.pop_back();
+      if (done.count(hkl)) continue;
+      done.insert(hkl);
+      if (!is_candidate(source,crystl,hkl)) continue;
+      todo.push_back({get<0>(hkl)-1,get<1>(hkl)  ,get<2>(hkl)  });
+      todo.push_back({get<0>(hkl)+1,get<1>(hkl)  ,get<2>(hkl)  });
+      todo.push_back({get<0>(hkl)  ,get<1>(hkl)-1,get<2>(hkl)  });
+      todo.push_back({get<0>(hkl)  ,get<1>(hkl)+1,get<2>(hkl)  });
+      todo.push_back({get<0>(hkl)  ,get<1>(hkl)  ,get<2>(hkl)-1});
+      todo.push_back({get<0>(hkl)  ,get<1>(hkl)  ,get<2>(hkl)+1});
+      candidates.push_back(hkl);
+      //cerr << get<0>(hkl) << " " << get<1>(hkl) << " " << get<2>(hkl) << endl;
+      continue;
     }
+    return candidates;
+  }
+
+  auto predict_integrals(
+      const vector<struct source>& sources,
+      const struct crystl& crystl,
+      const vector<tuple<int,int,int>>& candidates,
+      const double& min_flx = exp(-1)
+      ){
+    vector<tuple<tuple<int,int,int>,double,matrix<double,3,1>>> prediction;
+    prediction.resize(candidates.size());
+    transform(
+        std::execution::par_unseq,
+        candidates.begin(),
+        candidates.end(),
+        prediction.begin(),
+        [&sources,&crystl](const auto& hkl){
+          double flx = 0;
+          for (const auto& source : sources)
+            flx+= predict_integral
+              (
+                source,
+                crystl,
+                hkl,
+                optimize_wout(source,crystl,hkl)
+              );
+          return make_tuple(
+              hkl,
+              flx,
+              optimize_wout(average_source(sources),crystl,hkl));
+        });
+    remove_if(
+        prediction.begin(),
+        prediction.end(),
+        [&min_flx](const auto& t){
+          const auto& flx = get<1>(t);
+          if (isnan(flx)) return true;
+          if (flx<min_flx) return true;
+          return false;
+        });
+    prediction.shrink_to_fit();
+    return prediction;
+  }
 
   auto predict_integrals(
       const vector<struct source>& sources,
       const struct crystl& crystl,
       const double& min_flx = exp(-1)
-      ){
-    vector<tuple<tuple<int,int,int>,double,matrix<double,3,1>>> prediction;
+      )
+  {
     const auto candidates = get_candidates(average_source(sources),crystl);
-    cerr << "there are " << candidates.size() << " candidates" << endl;
-    prediction.reserve(candidates.size());
-    for (const auto& hkl : candidates) {
-      double flx = 0;
-      for (const auto& source : sources)
-        flx+= predict_integral
-          (
-            source,
-            crystl,
-            hkl,
-            optimize_wout(source,crystl,hkl)
-          );
-      if (isnan(flx)) continue;
-      if (flx<min_flx) continue;
-      //cerr << flx << " "
-      //     << get<0>(hkl) << " "
-      //     << get<1>(hkl) << " "
-      //     << get<2>(hkl) << endl;
-      const matrix<double,3,1> w =
-        optimize_wout(average_source(sources),crystl,hkl);
-      prediction.emplace_back(hkl,flx,w);
-    }
-    cerr << "number of predictions: " << prediction.size() << endl;
-    return prediction;
+    return predict_integrals(sources,crystl,candidates,min_flx);
   }
 
   auto filter_and_project
@@ -1267,89 +1260,117 @@ namespace partiality{
       matrix<double,2,1>,
       matrix<double,2,2>
     >> projection;
-    projection.reserve(prediction.size());
-    for (const auto& [hkl,flx,w] : prediction)
-    {
-      const matrix<double,3,1> dhkl
-      {
-        1.0*get<0>(hkl),
-        1.0*get<1>(hkl),
-        1.0*get<2>(hkl)
-      };
-      const matrix<double,3,1>  x   = crystl.R*dhkl;
-      const matrix<double,3,3>  S   = crystl.S(x)+source.Sw(w);
-      const matrix<double,3,3> iS   = inv(S);
-      for (const auto& panel : geom.panels)
-      {
-        const matrix<double,2,1> fs{1.0,0.0};
-        const matrix<double,2,1> ss{0.0,1.0};
-        const matrix<double,3,1> n =
-          normalize(cross_product(panel.D*fs,panel.D*ss));
-        //cerr << pow(double(trans(w)*n),2u) << endl;
-        if (pow(double(trans(w)*n),2u)<0.01) continue;
-        matrix<double,3,1> y = w;
-        matrix<double,2,1> fsss = panel(y);
-        const matrix<double,3,2> P =
-            (panel.D-y*trans(y)*panel.D/length_squared(y))
-          * length(source.kin)/length(y);
-        const matrix<double,3,1> v0 = x+source.kin-w*length(source.kin);
-        // 
-        //                               # trans(v0-P*x)*iS*(v0-P*x)
-        //   trans(v0)*iS*v0
-        // - trans(x)*trans(P)*iS*v0
-        // - trans(v0)*iS*P*x
-        // + trans(x)*trans(P)*iS*P*x
-        // =                             # trans(v1-x)*trans(P)*iS*P*(v1-x) + c
-        //   trans(v1)*trans(P)*iS*P*v1 + c
-        //  -trans(x)*trans(P)*iS*P*v1
-        //  -trans(v1)*trans(P)*iS*P*x
-        //  +trans(x)*trans(P)*iS*P*x
-        // 
-        //   trans(x)*trans(P)*iS*v0   =   trans(x)*trans(P)*iS*P*v1
-        //          trans(P*x)*iS*v0   =          trans(P*x)*iS*P*v1    
-        //            trans(P)*iS*v0   =            trans(P)*iS*P*v1
-        //                          v1 = inv(trans(P)*iS*P)*trans(P)*iS*v0
-        //
-        const matrix<double,2,2> PiSP   = trans(P)*iS*P;
-        const matrix<double,2,2> iPiSP  = inv(PiSP);
-        const matrix<double,2,2> pS     = iPiSP+identity_matrix<double>(2)/2;
-        const matrix<double,2,2> ipS    = inv(pS);
-        fsss+=iPiSP*trans(P)*iS*v0; // should be small...
-        // flx*exp(-0.5*trans(a*fs)*ipS*(a*fs))/sqrt(det(2*pi*pS))
-        // =
-        // min_flx;
-        // <->
-        // # intersection
-        // a=sqrt((2*log(flx)-2*log(min_flx)-log(det(2*pi*pS)))/trans(fs*ipS*fs))
-        // # projection, this is what we want
-        // a=sqrt((2*log(flx)-2*log(min_flx)-log(det(2*pi*pS)))*trans(fs*pS*fs))
-        //const double tmp =
-        //    (2*log(flx)-2*log(min_flx)-log(det(2*pi*pS)))
-        //  * (trans(fs)*pS*fs);
-        //if (tmp<=0.0) continue;
-        //cerr << double(trans(fs)*pS*fs) << " " << trans(ss)*pS*ss << endl;
-        const double a = sqrt(25*trans(fs)*pS*fs);
-        const double b = sqrt(25*trans(ss)*pS*ss);
-        //cerr << fsss(0) - a << " " << fsss(0) << " " << fsss(0) + a << endl;
-        //cerr << fsss(1) - b << " " << fsss(1) << " " << fsss(1) + b << endl;
-        const matrix<double,2,1> fsss0{
-          fsss(0) - a,
-          fsss(1) - b
-        };
-        const matrix<double,2,1> fsss1{
-          fsss(0) + a,
-          fsss(1) + b
-        };
-        if ( (fsss1(0)<0)
-           | (fsss1(1)<0)
-           | (panel.nfs<fsss0(0))
-           | (panel.nss<fsss0(1))
-           ) continue;
-        //cerr << trans(fsss);
-        //cerr << pS << endl;
-        projection.emplace_back(hkl,flx,&panel,fsss,iPiSP);
-      }
-    }
+    vector<vector<tuple<
+      IDX,
+      double,
+      const panel*,
+      matrix<double,2,1>,
+      matrix<double,2,2>
+    >>> structured_projections;
+    structured_projections.resize(prediction.size());
+    transform(
+        std::execution::par_unseq,
+        prediction.begin(),
+        prediction.end(),
+        structured_projections.begin(),
+        [&source,&crystl,&geom,&min_flx](const auto& t){
+          const auto& [hkl,flx,w] = t;
+          const matrix<double,3,1> dhkl
+          {
+            1.0*get<0>(hkl),
+            1.0*get<1>(hkl),
+            1.0*get<2>(hkl)
+          };
+          const matrix<double,3,1>  x   = crystl.R*dhkl;
+          const matrix<double,3,3>  S   = crystl.S(x)+source.Sw(w);
+          const matrix<double,3,3> iS   = inv(S);
+          vector<tuple<
+            IDX,
+            double,
+            const panel*,
+            matrix<double,2,1>,
+            matrix<double,2,2>
+          >> projection;
+          for (const auto& panel : geom.panels)
+          {
+            const matrix<double,2,1> fs{1.0,0.0};
+            const matrix<double,2,1> ss{0.0,1.0};
+            const matrix<double,3,1> n =
+              normalize(cross_product(panel.D*fs,panel.D*ss));
+            //cerr << pow(double(trans(w)*n),2u) << endl;
+            if (pow(double(trans(w)*n),2u)<0.01) continue;
+            matrix<double,3,1> y = w;
+            matrix<double,2,1> fsss = panel(y);
+            const matrix<double,3,2> P =
+                (panel.D-y*trans(y)*panel.D/length_squared(y))
+              * length(source.kin)/length(y);
+            const matrix<double,3,1> v0 = x+source.kin-w*length(source.kin);
+            // 
+            //                               # trans(v0-P*x)*iS*(v0-P*x)
+            //   trans(v0)*iS*v0
+            // - trans(x)*trans(P)*iS*v0
+            // - trans(v0)*iS*P*x
+            // + trans(x)*trans(P)*iS*P*x
+            // =                          # trans(v1-x)*trans(P)*iS*P*(v1-x) + c
+            //   trans(v1)*trans(P)*iS*P*v1 + c
+            //  -trans(x)*trans(P)*iS*P*v1
+            //  -trans(v1)*trans(P)*iS*P*x
+            //  +trans(x)*trans(P)*iS*P*x
+            // 
+            //   trans(x)*trans(P)*iS*v0   =   trans(x)*trans(P)*iS*P*v1
+            //          trans(P*x)*iS*v0   =          trans(P*x)*iS*P*v1    
+            //            trans(P)*iS*v0   =            trans(P)*iS*P*v1
+            //                          v1 = inv(trans(P)*iS*P)*trans(P)*iS*v0
+            //
+            const matrix<double,2,2> PiSP   = trans(P)*iS*P;
+            const matrix<double,2,2> iPiSP  = inv(PiSP);
+            const matrix<double,2,2> pS     = iPiSP+identity_matrix<double>(2)/2;
+            const matrix<double,2,2> ipS    = inv(pS);
+            fsss+=iPiSP*trans(P)*iS*v0; // should be small...
+            // flx*exp(-0.5*trans(a*fs)*ipS*(a*fs))/sqrt(det(2*pi*pS))
+            // =
+            // min_flx;
+            // <->
+            // # intersection
+            // a=sqrt((
+            // 2*log(flx)-2*log(min_flx)-log(det(2*pi*pS)))/trans(fs*ipS*fs))
+            // # projection, this is what we want
+            // a=sqrt(
+            // (2*log(flx)-2*log(min_flx)-log(det(2*pi*pS)))*trans(fs*pS*fs))
+            //const double tmp =
+            //    (2*log(flx)-2*log(min_flx)-log(det(2*pi*pS)))
+            //  * (trans(fs)*pS*fs);
+            //if (tmp<=0.0) continue;
+            //cerr << double(trans(fs)*pS*fs) << " " << trans(ss)*pS*ss << endl;
+            const double a = sqrt(25*trans(fs)*pS*fs);
+            const double b = sqrt(25*trans(ss)*pS*ss);
+            //cerr << fsss(0) - a << " "
+            //     << fsss(0)     << " "
+            //     << fsss(0) + a << endl;
+            //cerr << fsss(1) - b << " "
+            //     << fsss(1)     << " "
+            //     << fsss(1) + b << endl;
+            const matrix<double,2,1> fsss0{
+              fsss(0) - a,
+              fsss(1) - b
+            };
+            const matrix<double,2,1> fsss1{
+              fsss(0) + a,
+              fsss(1) + b
+            };
+            if ( (fsss1(0)<0)
+               | (fsss1(1)<0)
+               | (panel.nfs<fsss0(0))
+               | (panel.nss<fsss0(1))
+               ) continue;
+            //cerr << trans(fsss);
+            //cerr << pS << endl;
+            projection.emplace_back(hkl,flx,&panel,fsss,iPiSP);
+          }
+          return projection;
+        });
+    for (const auto& v : structured_projections) for (const auto& e : v)
+      projection.push_back(e);
     return projection;
   }
 
@@ -1358,11 +1379,18 @@ namespace partiality{
     const vector<struct source>& sources,
     const struct crystl& crystl,
     const struct geometry& geom,
+    const vector<tuple<
+      IDX,
+      double,
+      const panel*,
+      matrix<double,2,1>,
+      matrix<double,2,2>
+    >>& projections,
     const double& min_flx = exp(-1),
     const size_t oversampling = 1
   )
   {
-    constexpr double max_var = 5*5;
+    constexpr double max_var = pow(2.5,2);
     using reflection = vector<tuple<
           size_t,
           double,
@@ -1374,165 +1402,331 @@ namespace partiality{
         >>;
     const auto source = average_source(sources);
     //cerr << "projecting and filtering" << endl;
-    const auto projections =
-      filter_and_project
-        (
-          source,
-          crystl,
-          geom,
-          predict_integrals(sources,crystl,min_flx)
-        );
-    //cerr << "number of projections after filter: " << projections.size() << endl;
     vector<tuple<IDX,reflection>> prediction;
-    size_t counter = 0;
-    for (const auto& [hkl,flx,p,m0,_S] : projections) {
-      const double _flx = flx;
-      //cerr << get<0>(hkl) << " " << get<1>(hkl) << " " << get<2>(hkl) << endl;
-      double integral = 0;
-      //cerr << counter++ << " ";
-      const matrix<double,2,2>  S = _S+identity_matrix<double>(2)/2;
-      const matrix<double,2,2> iS = inv(S);
-      //const double ext_fs = 8;//3*sqrt(S(0,0));
-      const double ext_fs = sqrt(max_var*S(0,0));
-      //const double ext_ss = 8;//3*sqrt(S(1,1));
-      const double ext_ss = sqrt(max_var*S(1,1));
-      const size_t min_fs = clip(int64_t(floor(m0(0)-ext_fs)),0,p->nfs-1);
-      const size_t max_fs = clip(int64_t( ceil(m0(0)+ext_fs)),0,p->nfs-1);
-      const size_t min_ss = clip(int64_t(floor(m0(1)-ext_ss)),0,p->nss-1);
-      const size_t max_ss = clip(int64_t( ceil(m0(1)+ext_ss)),0,p->nss-1); 
-      for (size_t ss=min_ss;ss<=max_ss;++ss) {
-        for (size_t fs=min_fs;fs<=max_fs;++fs) {
-          const matrix<double,2,1> fsss{1.0*fs+0.5,1.0*ss+0.5};
-          const double tflx =
-              flx
-            * exp(-0.5*trans(fsss-m0)*iS*(fsss-m0))
-            / sqrt(det(2*pi*S));
-          if (trans(fsss-m0)*iS*(fsss-m0)>max_var) continue;
-          //if (tflx<min_flx) continue;
-          do
-          {
-            if (prediction.size())
-              if (get<0>(prediction.back())==hkl) continue;
-            prediction.emplace_back(hkl,reflection{});
-          }while(false);
-          get<1>(prediction.back()).emplace_back(
-              (*p)(fs,ss),0.0,0.0,0.0,
-              (struct crystl){},(struct crystl){},(struct crystl){}
-              );
-          vector<tuple<
-            double,
-            double,
-            double,
-            struct crystl,
-            struct crystl,
-            struct crystl
-          >> p_predictions;
-          p_predictions.reserve(oversampling*oversampling*sources.size());
-          auto& [i,flx,wvn,bnd,dflx,dwvn,dbnd]=get<1>(prediction.back()).back();
-          for (size_t oss=0;oss!=oversampling;++oss) {
-            for (size_t ofs=0;ofs!=oversampling;++ofs) {
-              const double o = oversampling;
-              const matrix<double,2,1> x{fs+(2*ofs+1)/(2*o),ss+(2*oss+1)/(2*o)};
-              const matrix<double,3,1> y = (*p)(x);
-              const double t2 = 1.0/length_squared(y);
-              const double t = sqrt(t2);
-              const matrix<double,3,1> w = y*t;
-              const matrix<double,3,2> D =
-                  length(source.kin)
-                * t*((p->D)+y*(trans(y)*(p->D))*t2);
-              const matrix<double,2,2> psf_det{0.5/o,0.0,0.0,0.5/o};
-              const matrix<double,3,3> psf = (D*psf_det)*trans(D*psf_det); 
-              for (const auto& source : sources) {
-                p_predictions.push_back
-                (
-                  predict
-                  (
-                    w,
-                    psf,
-                    hkl,
-                    source,
-                    crystl
-                  )
-                );
-                if constexpr (false) {
-                  auto crystl_p = crystl;
-                  auto crystl_m = crystl;
-                  crystl_p.a+=1e-8;
-                  crystl_m.a-=1e-8;
-                  patchmap<tuple<size_t,int>,tuple<double,double,double>> data;
-                  const auto prediction = predict(w,psf,hkl,source,crystl);
-                  const auto prediction_p = predict(w,psf,hkl,source,crystl_p);
-                  const auto prediction_m = predict(w,psf,hkl,source,crystl_m);
-                  cout << get<3>(prediction).a << " "
-                       << (get<0>(prediction_p)-get<0>(prediction_m))/2e-8<<" "
-                       << get<4>(prediction).a << " "
-                       << (get<1>(prediction_p)-get<1>(prediction_m))/2e-8<<" "
-                       << get<5>(prediction).a << " "
-                       << (get<2>(prediction_p)-get<2>(prediction_m))/2e-8<<" "
-                       << endl;
+    prediction.resize(projections.size());
+    transform(
+        std::execution::par_unseq,
+        projections.begin(),
+        projections.end(),
+        prediction.begin(),
+        [&source,&sources,&crystl,&geom,&min_flx,&oversampling,&max_var]
+        (const auto& t)
+        {
+          reflection refl;
+          const auto& [hkl,flx,p,m0,_S] = t;
+          double integral = 0;
+          // const double _flx = flx;
+          //cerr << get<0>(hkl) << " "
+          //     << get<1>(hkl) << " "
+          //     << get<2>(hkl) << endl;
+          //cerr << counter++ << " ";
+          const matrix<double,2,2>  S = _S+identity_matrix<double>(2)/2;
+          const matrix<double,2,2> iS = inv(S);
+          const double ext_fs = sqrt(max_var*S(0,0));
+          const double ext_ss = sqrt(max_var*S(1,1));
+          const size_t min_fs =
+            clip(int64_t(floor(m0(0)-ext_fs)),0,int64_t(p->nfs-1));
+          const size_t max_fs =
+            clip(int64_t( ceil(m0(0)+ext_fs)),0,int64_t(p->nfs-1));
+          const size_t min_ss =
+            clip(int64_t(floor(m0(1)-ext_ss)),0,int64_t(p->nss-1));
+          const size_t max_ss =
+            clip(int64_t( ceil(m0(1)+ext_ss)),0,int64_t(p->nss-1)); 
+          refl.reserve((max_fs-min_fs)*(max_ss-min_ss));
+          for (size_t ss=min_ss;ss<=max_ss;++ss) {
+            for (size_t fs=min_fs;fs<=max_fs;++fs) {
+              const matrix<double,2,1> fsss{1.0*fs+0.5,1.0*ss+0.5};
+              //const double tflx =
+              //    flx
+              //  * exp(-0.5*trans(fsss-m0)*iS*(fsss-m0))
+              //  / sqrt(det(2*pi*S));
+              if (trans(fsss-m0)*iS*(fsss-m0)>max_var) continue;
+              //if (tflx<min_flx) continue;
+              refl.emplace_back(
+                  (*p)(fs,ss),0.0,0.0,0.0,
+                  (struct crystl){},(struct crystl){},(struct crystl){}
+                  );
+              vector<tuple<
+                double,
+                double,
+                double,
+                struct crystl,
+                struct crystl,
+                struct crystl
+              >> p_predictions;
+              p_predictions.reserve(oversampling*oversampling*sources.size());
+              auto& [i,flx,wvn,bnd,dflx,dwvn,dbnd] = refl.back();
+              for (size_t oss=0;oss!=oversampling;++oss) {
+                for (size_t ofs=0;ofs!=oversampling;++ofs) {
+                  const double o = oversampling;
+                  const matrix<double,2,1> x{
+                    fs+(2*ofs+1)/(2*o),
+                    ss+(2*oss+1)/(2*o)};
+                  const matrix<double,3,1> y = (*p)(x);
+                  const double t2 = 1.0/length_squared(y);
+                  const double t = sqrt(t2);
+                  const matrix<double,3,1> w = y*t;
+                  const matrix<double,3,2> D =
+                      length(source.kin)
+                    * t*((p->D)+y*(trans(y)*(p->D))*t2);
+                  const matrix<double,2,2> psf_det{0.5/o,0.0,0.0,0.5/o};
+                  const matrix<double,3,3> psf = (D*psf_det)*trans(D*psf_det); 
+                  for (const auto& source : sources) {
+                    p_predictions.push_back
+                    (
+                      predict
+                      (
+                        w,
+                        psf,
+                        hkl,
+                        source,
+                        crystl
+                      )
+                    );
+                    if constexpr (false) {
+                      auto crystl_p = crystl;
+                      auto crystl_m = crystl;
+                      crystl_p.a+=1e-8;
+                      crystl_m.a-=1e-8;
+                      patchmap<tuple<size_t,int>,tuple<double,double,double>>
+                        data;
+                      const auto prediction =
+                        predict(w,psf,hkl,source,crystl);
+                      const auto prediction_p =
+                        predict(w,psf,hkl,source,crystl_p);
+                      const auto prediction_m =
+                        predict(w,psf,hkl,source,crystl_m);
+                      cout << get<3>(prediction).a << " "
+                           << (get<0>(prediction_p)-get<0>(prediction_m))/2e-8
+                           <<" "
+                           << get<4>(prediction).a << " "
+                           << (get<1>(prediction_p)-get<1>(prediction_m))/2e-8
+                           <<" "
+                           << get<5>(prediction).a << " "
+                           << (get<2>(prediction_p)-get<2>(prediction_m))/2e-8
+                           <<" "
+                           << endl;
+                    }
+                  }
                 }
               }
+              for (const auto& [pflx,pwvn,pbnd,pdflx,pdwvn,pdbnd] :
+                  p_predictions) {
+                auto& [i,flx,wvn,bnd,dflx,dwvn,dbnd]= refl.back();
+                flx  += pflx;
+                wvn  += pflx*pwvn;//wvn  += pwvn;
+                bnd  += pflx*pbnd;
+                dflx += pdflx;
+                dwvn += pdflx*pwvn+pdwvn*pflx;
+                dbnd += pdflx*pbnd+pdbnd*pflx;
+              }
+              integral += flx;
+              wvn  /= flx;
+              dwvn *= 1.0/flx;
+              dwvn -= dflx*(wvn/flx);
+              // there is some numerical instability somewhere in the lines above
+              // that's why I think I have to do this, but it can only ever be 0
+              // so it's fine
+              dwvn.a = 0;
+              dwvn.b = 0;
+              for (const auto& [pflx,pwvn,pbnd,pdflx,pdwvn,pdbnd] :
+                  p_predictions) {
+                auto& [i,flx,wvn,bnd,dflx,dwvn,dbnd]= refl.back();
+                bnd  += pflx*pow(pwvn-wvn,2u);
+                dbnd += pdflx*pow(pwvn-wvn,2u)+(pdwvn-dwvn)*pflx*2*(pwvn-wvn);
+              }
+              bnd  /= flx;
+              dbnd *= 1.0/flx;
+              dbnd -= dflx*(bnd/flx);
+              // there is some numerical instability somewhere in the lines above
+              // that's why I think I have to do this, but it can only ever be 0
+              // so it's fine
+              dbnd.a = 0;
+              dbnd.b = 0;
             }
           }
-          for (const auto& [pflx,pwvn,pbnd,pdflx,pdwvn,pdbnd] : p_predictions) {
-            auto& [i,flx,wvn,bnd,dflx,dwvn,dbnd]=
-              get<1>(prediction.back()).back();
-            flx  += pflx;
-            wvn  += pflx*pwvn;//wvn  += pwvn;
-            bnd  += pflx*pbnd;
-            dflx += pdflx;
-            dwvn += pdflx*pwvn+pdwvn*pflx;
-            dbnd += pdflx*pbnd+pdbnd*pflx;
-          }
-          {
-            const double o = oversampling;
-            matrix<double,3,1> v0 =
-              normalize((*p)(matrix<double,2,1>{fs+0.0,ss+0.0}));
-            matrix<double,3,1> v1 =
-              normalize((*p)(matrix<double,2,1>{fs+1.0/o,ss+0.0}));
-            matrix<double,3,1> v2 =
-              normalize((*p)(matrix<double,2,1>{fs+0.0,ss+1.0/o}));
-            matrix<double,3,1> v3 =
-              normalize((*p)(matrix<double,2,1>{fs+1.0/o,ss+1.0/o}));
-            const double area = length(v1-v0)*length(v2-v0);
-            integral += flx;
-            //cerr << integral << " " << flx << " "
-            //     << area << " " << _flx << endl;
-          }
-          wvn  /= flx;
-          dwvn *= 1.0/flx;
-          dwvn -= dflx*(wvn/flx);
-          // there is some numerical instability somewhere in the lines above
-          // that's why I think I have to do this, but it can only ever be 0
-          // so it's fine
-          dwvn.a = 0;
-          dwvn.b = 0;
-          for (const auto& [pflx,pwvn,pbnd,pdflx,pdwvn,pdbnd] : p_predictions) {
-            auto& [i,flx,wvn,bnd,dflx,dwvn,dbnd]=
-              get<1>(prediction.back()).back();
-            bnd  += pflx*pow(pwvn-wvn,2u);
-            dbnd += pdflx*pow(pwvn-wvn,2u)+(pdwvn-dwvn)*pflx*2*(pwvn-wvn);
-          }
-          bnd  /= flx;
-          dbnd *= 1.0/flx;
-          dbnd -= dflx*(bnd/flx);
-          // there is some numerical instability somewhere in the lines above
-          // that's why I think I have to do this, but it can only ever be 0
-          // so it's fine
-          dbnd.a = 0;
-          dbnd.b = 0;
+          if (integral<min_flx) refl.clear();
+          refl.shrink_to_fit();
+          return make_tuple(hkl,refl);
+        });
+    remove_if(
+        prediction.begin(),
+        prediction.end(),
+        [&min_flx](const auto& t){
+          const auto&[hkl,refl] = t;
+          return refl.size()==0;
         }
-      }
-      //cerr << flx << " " << integral << endl;
-      if (prediction.size())
-        if (get<0>(prediction.back())==hkl) 
-          if (integral<min_flx) {
-            //cerr << integral << " " << min_flx << endl;
-            prediction.pop_back();
-          }
-    }
-    //cerr << "prediction end" << endl;
+        );
+    prediction.shrink_to_fit();
     return prediction;
+  }
+  
+  auto predict
+  (
+    const vector<struct source>& sources,
+    const struct crystl& crystl,
+    const struct geometry& geom,
+    const vector<tuple<int,int,int>>& candidates,
+    const double& min_flx = exp(-1),
+    const size_t oversampling = 1
+  )
+  {
+    return predict(
+        sources,
+        crystl,
+        geom,
+        filter_and_project
+          (
+            average_source(sources),
+            crystl,
+            geom,
+            predict_integrals(sources,crystl,candidates,0)
+          ),
+        exp(-1),
+        oversampling
+        );
+  }
+  
+  auto predict
+  (
+    const vector<struct source>& sources,
+    const struct crystl& crystl,
+    const struct geometry& geom,
+    const double& min_flx = exp(-1),
+    const size_t oversampling = 1
+  )
+  {
+    return predict(
+        sources,
+        crystl,
+        geom,
+        get_candidates(average_source(sources),crystl),
+        exp(-1),
+        oversampling
+        );
+  }
+ 
+  // I just can't calculate these derivatives, I failed
+  const inline
+  tuple<double,double,double>
+  predict_integrated
+  (
+    const IDX& hkl,
+    const struct source& source,
+    const struct crystl& crystl
+  )
+  {
+    const matrix<double,3,1> dhkl
+      {1.0*get<0>(hkl),1.0*get<1>(hkl),1.0*get<2>(hkl)};
+    const matrix<double,3,1>     x     = crystl.R*dhkl;
+    const matrix<double,3,1>     w     = optimize_wout(source,crystl,hkl);
+    const matrix<double,3,3>     S0    = source.Sw(w);
+    // const matrix<double,3,3>    iS0    = inv(S0); // unused
+    const matrix<double,3,3>     S1    = crystl.S2(x);
+    // const matrix<double,3,3>    iS1    = inv(S1); // unused
+    const matrix<double,3,3>     S     = S0+S1;
+    // const matrix<double,3,3> adj_S1    = adj(S1); // unused
+    // const matrix<double,3,3>     S_circ= S0+S1; // unused
+    const matrix<double,3,3>    iS_star= inv(S0)+inv(S1);
+    // const matrix<double,3,3>     S_star= inv(iS_star); // unused
+    const double                 v     = trans(w)*S*w;
+    const matrix<double,3,1>     p     = w*length(source.kin)-source.kin;
+    // const matrix<double,3,1>     d     = x-p; // unused
+    const auto [e,eJ] = exponential2(hkl,w,source,crystl);
+    const double flx =
+      e*crystl.scaling(x)/(source.area()*sqrt(pi*v));
+      //sqrt((pi*v)*det(4*pi*S0)*det(4*pi*S1))/source.area();
+    const matrix<double,3,1> dw = w-normalize(source.kin);
+    const matrix<double,3,1> ww = dw/length_squared(dw);
+    //const double wvn = trans(ww)*S_star*(iS0*x+iS1*p); // numerically unstable
+    cholesky_decomposition<matrix<double,3,3>> chol_S0(S0);
+    const matrix<double,3,1> iS0x = chol_S0.solve(x);
+    cholesky_decomposition<matrix<double,3,3>> chol_S1(S1);
+    const matrix<double,3,1> iS1p = chol_S1.solve(p);
+    //cerr << trans(ww);
+    //cerr << trans(iS0x+iS1p);
+    //cerr << trans(cholesky_decomposition<matrix<double,3,3>>(iS_star).solve(iS0x+iS1p)) << endl;
+    cholesky_decomposition<matrix<double,3,3>> chol_iS_star(iS_star);
+    const double wvn = trans(ww)*(chol_iS_star.solve(iS0x+iS1p));
+    //const double bnd = trans(ww)*S_star*ww; // numerically unstable
+    const double bnd =trans(ww)*chol_iS_star.solve(ww);
+    //cerr << e << " " << flx << " " << wvn << " " << bnd << endl;
+    if (!isfinite(flx)) return {0.0,0.0,0.0};
+    if (!isfinite(wvn)) return {0.0,0.0,0.0};
+    if (!isfinite(bnd)) return {flx,wvn,0.0};
+    return {flx,wvn,bnd};
+  }
+ 
+  const inline tuple<double,double,double>
+  predict_integrated
+  (
+    const IDX& hkl,
+    const vector<struct source>& sources,
+    const struct crystl& crystl
+  )
+  {
+    //bool wasnan = false;
+    double flx = 0;
+    double wvn = 0;
+    double bnd = 0;
+    for (auto it=sources.begin();it!=sources.end();++it) {
+      const auto tmp = predict_integrated(hkl,*it,crystl);
+      //cerr << get<0>(tmp) << " " << get<1>(tmp) << " " << get<2>(tmp) << endl;
+      //wasnan|=isnan(get<0>(tmp))
+      //      ||isnan(get<1>(tmp))
+      //      ||isnan(get<2>(tmp));
+      if (abs(get<0>(tmp))>1e-300)
+        mean_variance(get<1>(tmp),get<0>(tmp),flx,wvn,bnd);
+      bnd+=get<0>(tmp)*get<2>(tmp);
+    }
+    if (abs(flx)>1e-300) bnd/=flx;
+    else bnd = 0;
+    //if (isnan(flx)||isnan(wvn)||isnan(bnd)) {
+    //  cerr << "nan encountered in predic_integrated_mean " << wasnan << endl;
+    //}
+    return {flx,wvn,bnd};
+  }
+
+  const inline
+  tuple<double,double,double>
+  predict_integrated_onlyscaling
+  (
+    const IDX& hkl,
+    const struct source& source,
+    const struct crystl& crystl
+  )
+  {
+    const matrix<double,3,1> dhkl
+      {1.0*get<0>(hkl),1.0*get<1>(hkl),1.0*get<2>(hkl)};
+    const matrix<double,3,1>     x     = crystl.R*dhkl;
+    const matrix<double,3,1>     w     = optimize_wout(source,crystl,hkl);
+    const matrix<double,3,3>     S0    = source.Sw(w);
+    const matrix<double,3,3>    iS0    = inv(S0);
+    const matrix<double,3,3>     S1    = crystl.S2(x);
+    const matrix<double,3,3>    iS1    = inv(S1);
+    const matrix<double,3,3>     S     = S0+S1;
+    // const matrix<double,3,3> adj_S1    = adj(S1); // unused
+    // const matrix<double,3,3>     S_circ= S0+S1; // unused
+    const matrix<double,3,3>    iS_star= inv(S0)+inv(S1);
+    // const matrix<double,3,3>     S_star= inv(iS_star); // unused
+    const double                 v     = trans(w)*S*w;
+    const matrix<double,3,1>     p     = w*length(source.kin)-source.kin;
+    // const matrix<double,3,1>     d     = x-p; // unused
+    // const auto [e,eJ] = exponential2(hkl,w,source,crystl); // unused
+    const double flx = crystl.scaling(x)/(source.area()*sqrt(pi*v));
+      //sqrt((pi*v)*det(4*pi*S0)*det(4*pi*S1))/source.area();
+    const matrix<double,3,1> dw = w-normalize(source.kin);
+    const matrix<double,3,1> ww = dw/length_squared(dw);
+    //const double wvn = trans(ww)*S_star*(iS0*x+iS1*p); // numerically unstable
+    cholesky_decomposition<matrix<double,3,3>> chol_iS_star(iS_star);
+    const double wvn = trans(ww)*chol_iS_star.solve(iS0*x+iS1*p);
+    //const double bnd = trans(ww)*S_star*ww; // numerically unstable
+    const double bnd = trans(ww)*chol_iS_star.solve(ww);
+    //cerr << e << " " << flx << " " << wvn << " " << bnd << endl;
+    if (isnan(flx)) return {0.0,0.0,0.0};
+    if (isnan(wvn)) return {0.0,0.0,0.0};
+    if (isnan(bnd)) return {flx,wvn,0.0};
+    return {flx,wvn,bnd};
   }
 
 #if 0
@@ -1934,8 +2128,7 @@ namespace partiality{
              << y(0) << " " << y(1) << " " << y(2)<< endl;
       hkls.insert(index);
       if constexpr(mode==predict_mode::candidate_hkls) {continue;} else{
-      matrix<double,3,1>* wouts =
-        new matrix<double,3,1>[sources.size()]();
+      vector<matrix<double,3,1>> wouts(sources.size());
       double partiality = 0;
       double normalization = 0; // normalizing the partiality to a sane value
       if constexpr (mode==predict_mode::index_partiality)
@@ -2013,7 +2206,6 @@ namespace partiality{
                << partiality << endl;
         if constexpr (mode==predict_mode::index_partiality)
           prediction.pop_back();
-        delete[] wouts;
         continue;
       }
       //cerr << h << " " << k << " " << l << " 0 " << partiality << endl;
@@ -2024,7 +2216,6 @@ namespace partiality{
       get<1>(prediction.back())=partiality/(partiality+normalization);
       get<4>(prediction.back())=fsss(0);
       get<5>(prediction.back())=fsss(1);
-      delete[] wouts;
       continue;
       } else if constexpr(mode==predict_mode::pixel_partiality) {
       const double o = oversampling;
@@ -2034,7 +2225,7 @@ namespace partiality{
         typename conditional<
           compute_derivatives,
           tuple<double,double,double,struct crystl,struct crystl,struct crystl>,
-          tuple<double,double,double> // sumw mean M2
+          tuple<double,double,double> // sumw mean var
         >::type
       > shape;
       unordered_map<size_t,array<double,2>> helper;
@@ -2192,7 +2383,7 @@ namespace partiality{
               partiality,       // w
               get<0>(shape[p]), // sumw
               get<1>(shape[p]), // mean
-              get<2>(shape[p])  // M2
+              get<2>(shape[p])  // var
               );
           get<2>(shape[p]) += bnd*partiality;
           if constexpr (compute_derivatives) {
@@ -2244,28 +2435,28 @@ namespace partiality{
               partiality,
               get<0>(shape[p]), // sumw
               get<1>(shape[p]), // mean
-              get<2>(shape[p])  // M2
+              get<2>(shape[p])  // var
               );
           const double mean_dx = mean_variance_mean_dx(
               ewvn,
               partiality,
               get<0>(shape[p]), // sumw
               get<1>(shape[p]), // mean
-              get<2>(shape[p])  // M2
+              get<2>(shape[p])  // var
               );
-          const double M2_dw_ini = mean_variance_M2_dw_ini(
+          const double var_dw_ini = mean_variance_M2_dw_ini(
               ewvn,
               partiality,
               get<0>(shape[p]), // sumw
               get<1>(shape[p]), // mean
-              get<2>(shape[p])  // M2
+              get<2>(shape[p])  // var
               );
-          const double M2_dx_ini = mean_variance_M2_dx_ini(
+          const double var_dx_ini = mean_variance_M2_dx_ini(
               ewvn,
               partiality,
               get<0>(shape[p]), // sumw
               get<1>(shape[p]), // mean
-              get<2>(shape[p])  // M2
+              get<2>(shape[p])  // var
               );
         }
         //get<0>(shape[p])=1;
@@ -2307,7 +2498,6 @@ namespace partiality{
         }
         prediction.push_back(std::make_tuple(index,unrolledshape));
       }
-      delete[] wouts;
       }
     }
     }
@@ -2355,6 +2545,7 @@ namespace partiality{
     vector<source> sources;
     uint64_t n;
     file.read(reinterpret_cast<char*>(&n),8);
+    if (!file) return sources;
     sources.resize(n); 
     for (size_t i=0;i!=n;++i){
       struct source& source = sources[i];
@@ -2374,40 +2565,78 @@ namespace partiality{
     }
     return sources;
   }
+  
+  template<class ifstream>
+  const inline void serialize_crystl(
+      const struct crystl& crystl,
+      ifstream& file) {
+    file.write(reinterpret_cast<const char*>(&crystl.R(0,0)   ),8);
+    file.write(reinterpret_cast<const char*>(&crystl.R(0,1)   ),8);
+    file.write(reinterpret_cast<const char*>(&crystl.R(0,2)   ),8);
+    file.write(reinterpret_cast<const char*>(&crystl.R(1,0)   ),8);
+    file.write(reinterpret_cast<const char*>(&crystl.R(1,1)   ),8);
+    file.write(reinterpret_cast<const char*>(&crystl.R(1,2)   ),8);
+    file.write(reinterpret_cast<const char*>(&crystl.R(2,0)   ),8);
+    file.write(reinterpret_cast<const char*>(&crystl.R(2,1)   ),8);
+    file.write(reinterpret_cast<const char*>(&crystl.R(2,2)   ),8);
+    file.write(reinterpret_cast<const char*>(&crystl.peak(0,0)),8); 
+    file.write(reinterpret_cast<const char*>(&crystl.peak(0,1)),8);
+    file.write(reinterpret_cast<const char*>(&crystl.peak(0,2)),8); 
+    file.write(reinterpret_cast<const char*>(&crystl.peak(1,1)),8); 
+    file.write(reinterpret_cast<const char*>(&crystl.peak(1,2)),8); 
+    file.write(reinterpret_cast<const char*>(&crystl.peak(2,2)),8); 
+    file.write(reinterpret_cast<const char*>(&crystl.mosaicity),8);
+    file.write(reinterpret_cast<const char*>(&crystl.strain   ),8);
+    file.write(reinterpret_cast<const char*>(&crystl.a        ),8);
+    file.write(reinterpret_cast<const char*>(&crystl.b        ),8);
+  }
+
+  template<class ifstream>
+  crystl const inline deserialize_crystl(ifstream& file) {
+    struct crystl crystl;
+    file.read(reinterpret_cast<char*>(&crystl.R(0,0)   ),8);
+    file.read(reinterpret_cast<char*>(&crystl.R(0,1)   ),8);
+    file.read(reinterpret_cast<char*>(&crystl.R(0,2)   ),8);
+    file.read(reinterpret_cast<char*>(&crystl.R(1,0)   ),8);
+    file.read(reinterpret_cast<char*>(&crystl.R(1,1)   ),8);
+    file.read(reinterpret_cast<char*>(&crystl.R(1,2)   ),8);
+    file.read(reinterpret_cast<char*>(&crystl.R(2,0)   ),8);
+    file.read(reinterpret_cast<char*>(&crystl.R(2,1)   ),8);
+    file.read(reinterpret_cast<char*>(&crystl.R(2,2)   ),8);
+    file.read(reinterpret_cast<char*>(&crystl.peak(0,0)),8); 
+    file.read(reinterpret_cast<char*>(&crystl.peak(0,1)),8);
+    file.read(reinterpret_cast<char*>(&crystl.peak(0,2)),8); 
+    file.read(reinterpret_cast<char*>(&crystl.peak(1,1)),8); 
+    file.read(reinterpret_cast<char*>(&crystl.peak(1,2)),8); 
+    file.read(reinterpret_cast<char*>(&crystl.peak(2,2)),8); 
+    file.read(reinterpret_cast<char*>(&crystl.mosaicity),8);
+    file.read(reinterpret_cast<char*>(&crystl.strain   ),8);
+    file.read(reinterpret_cast<char*>(&crystl.a        ),8);
+    file.read(reinterpret_cast<char*>(&crystl.b        ),8);
+    crystl.peak(1,0) = crystl.peak(0,1);
+    crystl.peak(2,0) = crystl.peak(0,2);
+    crystl.peak(2,1) = crystl.peak(1,2);
+    crystl.U = inv(crystl.R);
+    return crystl;
+  }
+  
+  template<class ifstream>
+  const inline void serialize_crystls(
+      const vector<struct crystl>& crystls,
+      ofstream& file){
+    uint64_t n = crystls.size();
+    file.write(reinterpret_cast<char*>(&n),8);
+    for (size_t i=0;i!=n;++i) serialize_crystl(crystls[i],file); 
+  }
 
   template<class ifstream>
   vector<crystl> const inline deserialize_crystls(ifstream& file){
     vector<crystl> crystls;
     uint64_t n;
     file.read(reinterpret_cast<char*>(&n),8);
+    if (!file) return crystls;
     crystls.resize(n); 
-    for (size_t i=0;i!=n;++i){
-      struct crystl& crystl = crystls[i];
-      double peak;
-      file.read(reinterpret_cast<char*>(&crystl.R(0,0)   ),8);
-      file.read(reinterpret_cast<char*>(&crystl.R(0,1)   ),8);
-      file.read(reinterpret_cast<char*>(&crystl.R(0,2)   ),8);
-      file.read(reinterpret_cast<char*>(&crystl.R(1,0)   ),8);
-      file.read(reinterpret_cast<char*>(&crystl.R(1,1)   ),8);
-      file.read(reinterpret_cast<char*>(&crystl.R(1,2)   ),8);
-      file.read(reinterpret_cast<char*>(&crystl.R(2,0)   ),8);
-      file.read(reinterpret_cast<char*>(&crystl.R(2,1)   ),8);
-      file.read(reinterpret_cast<char*>(&crystl.R(2,2)   ),8);
-      file.read(reinterpret_cast<char*>(&crystl.peak(0,0)),8); 
-      file.read(reinterpret_cast<char*>(&crystl.peak(0,1)),8);
-      crystl.peak(1,0) = crystl.peak(0,1);
-      file.read(reinterpret_cast<char*>(&crystl.peak(0,2)),8); 
-      crystl.peak(2,0) = crystl.peak(0,2);
-      file.read(reinterpret_cast<char*>(&crystl.peak(1,1)),8); 
-      file.read(reinterpret_cast<char*>(&crystl.peak(1,2)),8); 
-      crystl.peak(2,1) = crystl.peak(1,2);
-      file.read(reinterpret_cast<char*>(&crystl.peak(2,2)),8); 
-      crystl.U = inv(crystl.R);
-      file.read(reinterpret_cast<char*>(&crystl.mosaicity),8);
-      file.read(reinterpret_cast<char*>(&crystl.strain   ),8);
-      file.read(reinterpret_cast<char*>(&crystl.a        ),8);
-      file.read(reinterpret_cast<char*>(&crystl.b        ),8);
-    }
+    for (size_t i=0;i!=n;++i) crystls[i] = deserialize_crystl(file); 
     return crystls;
   }
  
@@ -2439,7 +2668,7 @@ namespace partiality{
     constexpr size_t n_elems = 19;
     vector<array<double,n_elems>> buffer;
     while (in){
-      if (in.peek()=='<'){
+      if (in.peek()=='<') {
         in.get();
         buffer.push_back({});
         for (size_t i=0;i!=n_elems;++i) in >> buffer.back()[i];
@@ -2453,6 +2682,17 @@ namespace partiality{
     for (auto it=buffer.begin();it!=buffer.end();++it)
       for (size_t i=0;i!=n_elems;++i)
         out.write(reinterpret_cast<char*>(&((*it)[i])),8);
+  }
+  
+  template<class ifstream,class ofstream>
+  const inline void crystl_ascii2bin(ifstream& in,ofstream& out){
+    if (in.peek()=='<') in.get();
+    constexpr size_t n_elems = 19;
+    for (size_t i=0;i!=n_elems;++i) { 
+      double value;
+      in >> value;
+      out.write(reinterpret_cast<char*>(&value),8);
+    }
   }
 }
 #endif // PARTIALITY_H
